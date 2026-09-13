@@ -230,6 +230,65 @@ describe('工艺实验入口与完整流程（DOM 级）', () => {
     await flushAsync()
     expect(useStudio.getState().experiments).toHaveLength(0)
   })
+
+  it('弹窗中的删除入口同样需要二次确认：取消 / 超时不删，确认才删并关闭弹窗', async () => {
+    recordTrajectory()
+    const e = useStudio.getState().engine
+    const { buildExperimentCondition, runExperiment } = await import('./engine/experiment')
+    const cond = buildExperimentCondition(e.traj.slice(), {
+      param: 'temperature',
+      value: 1100,
+      fromFrame: 0,
+      toFrame: 90
+    })
+    await act(async () => {
+      await useStudio.getState().saveExperimentResult({
+        name: '保温实验',
+        condition: cond,
+        outcome: runExperiment(e.traj.slice(), cond),
+        baselineThumb: 'data:,b',
+        variantThumb: 'data:,v',
+        conclusion: ''
+      })
+    })
+
+    const openViewer = async (): Promise<void> => {
+      act(() => findButton(container, '查看对照').click())
+      await flushAsync()
+      expect(container.querySelector('.exp-dialog')).not.toBeNull()
+    }
+
+    // 点「删除实验」只进入确认态，记录与弹窗都还在
+    await openViewer()
+    act(() => findButton(container, '删除实验').click())
+    await flushAsync()
+    expect(findButton(container, '确认删除')).toBeTruthy()
+    expect(findButton(container, '取消')).toBeTruthy()
+    expect(useStudio.getState().experiments).toHaveLength(1)
+
+    // 点取消：不删除，回到普通按钮态
+    act(() => findButton(container, '取消').click())
+    await flushAsync()
+    expect(useStudio.getState().experiments).toHaveLength(1)
+    expect(findButton(container, '删除实验')).toBeTruthy()
+
+    // 再次进入确认态后等待 5 秒以上：自动还原，不删除
+    act(() => findButton(container, '删除实验').click())
+    expect(findButton(container, '确认删除')).toBeTruthy()
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(6000)
+    })
+    await flushAsync()
+    expect(useStudio.getState().experiments).toHaveLength(1)
+    expect(findButton(container, '删除实验')).toBeTruthy()
+
+    // 确认删除：真正移除并关闭弹窗
+    act(() => findButton(container, '删除实验').click())
+    act(() => findButton(container, '确认删除').click())
+    await flushAsync()
+    expect(useStudio.getState().experiments).toHaveLength(0)
+    expect(container.querySelector('.exp-dialog')).toBeNull()
+  })
 })
 
 /* ---------- 实验列表的筛选 / 排序（直接构造已持久化记录） ---------- */

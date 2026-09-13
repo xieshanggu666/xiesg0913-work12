@@ -329,7 +329,15 @@ function ExperimentViewer(props: {
 
   const [conclusion, setConclusion] = useState(meta.record.conclusion)
   const [saving, setSaving] = useState(false)
+  // 删除二次确认：与列表项 / 快照删除一致，进入确认态后 5 秒内可取消
+  const [confirmingDelete, setConfirmingDelete] = useState(false)
   const dirty = conclusion !== meta.record.conclusion
+
+  useEffect(() => {
+    if (!confirmingDelete) return
+    const timer = setTimeout(() => setConfirmingDelete(false), CONFIRM_MS)
+    return () => clearTimeout(timer)
+  }, [confirmingDelete])
 
   const saveConclusion = async (): Promise<void> => {
     setSaving(true)
@@ -415,9 +423,18 @@ function ExperimentViewer(props: {
           </label>
 
           <div className="exp-foot">
-            <button className="danger-btn" onClick={() => void onDelete()}>
-              删除实验
-            </button>
+            {confirmingDelete ? (
+              <>
+                <button className="danger-btn confirm" onClick={() => void onDelete()}>
+                  确认删除
+                </button>
+                <button onClick={() => setConfirmingDelete(false)}>取消</button>
+              </>
+            ) : (
+              <button className="danger-btn" onClick={() => setConfirmingDelete(true)}>
+                删除实验
+              </button>
+            )}
             <button className="primary" onClick={() => void saveConclusion()} disabled={saving || !dirty}>
               {saving ? '保存中…' : dirty ? '保存结论' : '结论已保存'}
             </button>
