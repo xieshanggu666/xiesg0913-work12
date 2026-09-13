@@ -1,0 +1,21 @@
+appId: studio.glassforge.app
+productName: GlassForge
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+  - package.json
+asarUnpack:
+  - node_modules/better-sqlite3/**
+mac:
+  category: public.app-category.graphics-design
+  target:
+    - dmg
+win:
+  target:
+    - nsis
+linux:
+  target:
+    - AppImage
+  category: Graphics
