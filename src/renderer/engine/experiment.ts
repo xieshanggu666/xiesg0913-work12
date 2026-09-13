@@ -362,6 +362,43 @@ export function filterExperiments<T extends ExperimentFilterable>(
     })
 }
 
+/* ---------- 列表分段（轻量分页，纯函数，可直接单测） ---------- */
+
+/** 列表单段条数：右栏空间有限，每段最多渲染 8 条，避免一次挂载大量缩略图 */
+export const EXPERIMENT_PAGE_SIZE = 8
+
+/** 一段列表的窗口信息（页码从 1 起，已钳制到有效范围） */
+export interface ExperimentPageWindow {
+  /** 当前段页码（1 起） */
+  page: number
+  /** 总段数（总数为 0 时也为 1，调用方按空列表自行渲染空态） */
+  pageCount: number
+  /** 当前段首条在筛选结果中的下标（含） */
+  start: number
+  /** 当前段末条之后的下标（不含） */
+  end: number
+}
+
+/**
+ * 由筛选结果总数与请求页码算出有效分段窗口：
+ * 请求页超出末段时回退到最后一个有效段（删除末段记录 / 保存结论改变命中数时用），
+ * 非正 / 非有限值一律视为首段。不抛异常，保证瞬时草稿状态下列表仍可渲染。
+ */
+export function paginateExperiments(
+  total: number,
+  requestedPage: number,
+  pageSize: number = EXPERIMENT_PAGE_SIZE
+): ExperimentPageWindow {
+  const size = Math.max(1, Math.floor(pageSize))
+  const safeTotal = Math.max(0, Math.floor(total))
+  const pageCount = Math.max(1, Math.ceil(safeTotal / size))
+  // 非有限值（NaN / ±Infinity）视为首段；越界整数页交给 min/max 钳到有效段
+  const raw = Number.isFinite(requestedPage) ? Math.floor(requestedPage) : 1
+  const page = Math.min(pageCount, Math.max(1, raw))
+  const start = (page - 1) * size
+  return { page, pageCount, start, end: Math.min(safeTotal, start + size) }
+}
+
 /* ---------- 持久化记录的序列化 / 严格解析（损坏时抛错，由列表层跳过） ---------- */
 
 const METRIC_FIELDS = [

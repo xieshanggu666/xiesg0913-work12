@@ -13,6 +13,7 @@ import {
   filterExperiments,
   formatDelta,
   isDefaultExperimentFilter,
+  paginateExperiments,
   summarizeBaselineValues,
   type ExperimentFilter
 } from '../engine/experiment'
@@ -34,10 +35,18 @@ export function ExperimentBar(): JSX.Element {
   const [viewing, setViewing] = useState<ExperimentMeta | null>(null)
   // 列表筛选 / 排序条件（纯本地视图状态，不持久化、不影响数据）
   const [filter, setFilter] = useState<ExperimentFilter>(DEFAULT_EXPERIMENT_FILTER)
+  // 分段浏览的当前段（1 起）；仅随筛选条件变化回首段，删除 / 保存后由有效段钳制保持位置
+  const [page, setPage] = useState(1)
 
   useEffect(() => {
     void refreshExperiments()
   }, [refreshExperiments])
+
+  // 切换任意筛选 / 排序条件后自动回到首段（首段一定有效）
+  const changeFilter = (next: ExperimentFilter): void => {
+    setFilter(next)
+    setPage(1)
+  }
 
   const startNew = (): void => {
     const frames = useStudio.getState().engine.traj
@@ -54,6 +63,13 @@ export function ExperimentBar(): JSX.Element {
   const visible = useMemo(() => filterExperiments(experiments, filter), [experiments, filter])
   const hasFilter = !isDefaultExperimentFilter(filter)
 
+  // 删除末段最后一条 / 保存结论导致命中数变化后，钳制到仍有效的段并同步页码状态
+  const window = paginateExperiments(visible.length, page)
+  useEffect(() => {
+    if (window.page !== page) setPage(window.page)
+  }, [window.page, page])
+  const pageItems = visible.slice(window.start, window.end)
+
   return (
     <div className="panel experiments">
       <h3>工艺实验</h3>
@@ -69,7 +85,7 @@ export function ExperimentBar(): JSX.Element {
         </p>
       ) : (
         <>
-          <ExperimentFilters filter={filter} onChange={setFilter} />
+          <ExperimentFilters filter={filter} onChange={changeFilter} />
           <p className="exp-filter-count" aria-live="polite">
             {hasFilter ? `匹配 ${visible.length} / 共 ${experiments.length} 条实验` : `共 ${experiments.length} 条实验`}
           </p>
@@ -77,23 +93,35 @@ export function ExperimentBar(): JSX.Element {
             // 与“尚无实验”区分：此时库里有实验，只是没有命中当前条件
             <p className="muted small exp-filter-empty">
               没有符合筛选条件的实验，换个关键词或放宽旋钮 / 结果筛选。
-              <button className="exp-filter-clear-link" onClick={() => setFilter(DEFAULT_EXPERIMENT_FILTER)}>
+              <button className="exp-filter-clear-link" onClick={() => changeFilter(DEFAULT_EXPERIMENT_FILTER)}>
                 清空筛选条件
               </button>
             </p>
           ) : (
-            <ul className="exp-list">
-              {visible.map((meta) => (
-                <ExperimentItem
-                  key={meta.record.id}
-                  meta={meta}
-                  onOpen={() => setViewing(meta)}
-                  onDelete={() => {
-                    if (meta.record.id != null) void removeExperiment(meta.record.id)
-                  }}
+            <>
+              <ul className="exp-list">
+                {pageItems.map((meta) => (
+                  <ExperimentItem
+                    key={meta.record.id}
+                    meta={meta}
+                    onOpen={() => setViewing(meta)}
+                    onDelete={() => {
+                      if (meta.record.id != null) void removeExperiment(meta.record.id)
+                    }}
+                  />
+                ))}
+              </ul>
+              {window.pageCount > 1 && (
+                <ExperimentPager
+                  page={window.page}
+                  pageCount={window.pageCount}
+                  start={window.start}
+                  end={window.end}
+                  total={visible.length}
+                  onPageChange={setPage}
                 />
-              ))}
-            </ul>
+              )}
+            </>
           )}
         </>
       )}
@@ -190,6 +218,44 @@ function ExperimentFilters(props: {
         </button>
       </div>
     </div>
+  )
+}
+
+/**
+ * 轻量分段导航：上一段 / 下一段 + “第 x / y 段 · 本段 a–b / 共 n 条”。
+ * 分段只切已筛选 / 排序后的结果，匹配数与总数提示仍由列表上方统一给出。
+ */
+function ExperimentPager(props: {
+  page: number
+  pageCount: number
+  start: number
+  end: number
+  total: number
+  onPageChange: (page: number) => void
+}): JSX.Element {
+  const { page, pageCount, start, end, total, onPageChange } = props
+  return (
+    <nav className="exp-pager" aria-label="实验列表分段">
+      <button
+        type="button"
+        className="exp-pager-btn"
+        disabled={page <= 1}
+        onClick={() => onPageChange(page - 1)}
+      >
+        上一段
+      </button>
+      <span className="exp-pager-info" aria-live="polite">
+        第 {page} / {pageCount} 段 · {start + 1}–{end} / 共 {total} 条
+      </span>
+      <button
+        type="button"
+        className="exp-pager-btn"
+        disabled={page >= pageCount}
+        onClick={() => onPageChange(page + 1)}
+      >
+        下一段
+      </button>
+    </nav>
   )
 }
 

@@ -807,6 +807,32 @@ button.danger-btn.confirm {
   cursor: pointer;
 }
 
+/* 实验列表轻量分段导航 */
+.exp-pager {
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.exp-pager-btn {
+  flex-shrink: 0;
+  padding: 3px 10px;
+  font-size: 11px;
+}
+
+.exp-pager-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.exp-pager-info {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
 .exp-overlay {
   position: fixed;
   inset: 0;

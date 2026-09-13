@@ -3,6 +3,7 @@ import type { TrajFrame } from '@shared/types'
 import { Engine, type GlassMetrics } from './engine'
 import {
   ExperimentError,
+  EXPERIMENT_PAGE_SIZE,
   PARAM_META,
   armStatus,
   buildExperimentCondition,
@@ -12,6 +13,7 @@ import {
   filterExperiments,
   formatDelta,
   isDefaultExperimentFilter,
+  paginateExperiments,
   parseExperimentCondition,
   parseExperimentOutcome,
   readBaselineValues,
@@ -468,5 +470,53 @@ describe('工艺实验：列表筛选与排序', () => {
     expect(
       filterExperiments(items, { ...DEFAULT_EXPERIMENT_FILTER, keyword: '完全不存在' })
     ).toEqual([])
+  })
+
+  it('分段作用于筛选 / 排序后的结果，不改变其顺序', () => {
+    const out = filterExperiments(items, DEFAULT_EXPERIMENT_FILTER) // 倒序 [4,3,2,1]
+    const w = paginateExperiments(out.length, 1, 2)
+    expect(out.slice(w.start, w.end).map((x) => x.record.id)).toEqual([4, 3])
+    const w2 = paginateExperiments(out.length, 2, 2)
+    expect(out.slice(w2.start, w2.end).map((x) => x.record.id)).toEqual([2, 1])
+  })
+})
+
+describe('工艺实验：列表分段（轻量分页）', () => {
+  it('默认每段 8 条', () => {
+    expect(EXPERIMENT_PAGE_SIZE).toBe(8)
+  })
+
+  it('总数不足一段：只有一段，窗口覆盖全部', () => {
+    expect(paginateExperiments(0, 1)).toEqual({ page: 1, pageCount: 1, start: 0, end: 0 })
+    expect(paginateExperiments(3, 1)).toEqual({ page: 1, pageCount: 1, start: 0, end: 3 })
+    expect(paginateExperiments(8, 1)).toEqual({ page: 1, pageCount: 1, start: 0, end: 8 })
+  })
+
+  it('超过一段：按页大小切分，末段只含剩余条数', () => {
+    expect(paginateExperiments(18, 1)).toEqual({ page: 1, pageCount: 3, start: 0, end: 8 })
+    expect(paginateExperiments(18, 2)).toEqual({ page: 2, pageCount: 3, start: 8, end: 16 })
+    expect(paginateExperiments(18, 3)).toEqual({ page: 3, pageCount: 3, start: 16, end: 18 })
+  })
+
+  it('请求页超出末段（删除末段记录后）回退到最后一个有效段', () => {
+    // 18 条时第 3 段有效；删掉 3 条变 15 条只有两段，旧的第 3 段应钳到第 2 段
+    expect(paginateExperiments(15, 3)).toEqual({ page: 2, pageCount: 2, start: 8, end: 15 })
+    // 整列表删空也不越界：停在首段空窗口
+    expect(paginateExperiments(0, 5)).toEqual({ page: 1, pageCount: 1, start: 0, end: 0 })
+  })
+
+  it('非正 / 非有限 / 小数页码安全钳制，不抛异常', () => {
+    expect(paginateExperiments(20, 0).page).toBe(1)
+    expect(paginateExperiments(20, -7).page).toBe(1)
+    expect(paginateExperiments(20, NaN).page).toBe(1)
+    expect(paginateExperiments(20, Infinity).page).toBe(1)
+    // 超出末段的有限页回退到最后一个有效段
+    expect(paginateExperiments(20, 999).page).toBe(3)
+    expect(paginateExperiments(20, 1.9)).toEqual({ page: 1, pageCount: 3, start: 0, end: 8 })
+  })
+
+  it('可传入自定义页大小，非法页大小按 1 处理', () => {
+    expect(paginateExperiments(10, 2, 4)).toEqual({ page: 2, pageCount: 3, start: 4, end: 8 })
+    expect(paginateExperiments(10, 1, 0)).toEqual({ page: 1, pageCount: 10, start: 0, end: 1 })
   })
 })

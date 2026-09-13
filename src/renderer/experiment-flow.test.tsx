@@ -462,3 +462,178 @@ describe('工艺实验列表：搜索 / 筛选 / 排序（DOM 级）', () => {
     expect(btn.disabled).toBe(false)
   })
 })
+
+/* ---------- 实验列表的分段加载 ---------- */
+
+function findPagerButton(container: HTMLElement, text: string): HTMLButtonElement {
+  const nav = container.querySelector('.exp-pager')
+  if (!nav) throw new Error('找不到分段导航')
+  const btn = Array.from(nav.querySelectorAll('button')).find((b) => b.textContent?.includes(text))
+  if (!btn) throw new Error(`找不到分段按钮「${text}」`)
+  return btn
+}
+
+function seedManyExperiments(count: number): void {
+  for (let i = 1; i <= count; i++) {
+    // 每 3 条一个“已报废”，便于验证筛选后重新分段
+    const status = i % 3 === 0 ? RUINED : VASE
+    seedExperimentRecord({
+      id: i,
+      name: `实验 ${String(i).padStart(2, '0')}`,
+      created_at: i * 1000,
+      param: 'temperature',
+      conclusion: i === 1 ? '含关键词的首条结论' : '',
+      variantMetrics: status
+    })
+  }
+}
+
+describe('工艺实验列表：分段加载（DOM 级）', () => {
+  let container: HTMLDivElement
+  let root: Root
+
+  beforeEach(async () => {
+    vi.useFakeTimers()
+    lsData.clear()
+    seedManyExperiments(18)
+    useStudio.getState().resetGlass()
+    await act(async () => {
+      await useStudio.getState().refreshExperiments()
+    })
+    container = document.createElement('div')
+    document.body.appendChild(container)
+    root = createRoot(container)
+    await act(async () => {
+      root.render(<App />)
+    })
+  })
+
+  afterEach(() => {
+    act(() => root.unmount())
+    container.remove()
+    vi.useRealTimers()
+  })
+
+  it('超过一段时分段渲染，逐段浏览并在末段禁用“下一段”', () => {
+    expect(namesInList(container)).toEqual(
+      Array.from({ length: 8 }, (_, k) => `实验 ${String(18 - k).padStart(2, '0')}`)
+    )
+    expect(container.textContent).toContain('共 18 条实验')
+    expect(container.textContent).toContain('第 1 / 3 段 · 1–8 / 共 18 条')
+    expect(findPagerButton(container, '上一段').disabled).toBe(true)
+    expect(findPagerButton(container, '下一段').disabled).toBe(false)
+
+    act(() => findPagerButton(container, '下一段').click())
+    expect(namesInList(container)).toEqual(
+      Array.from({ length: 8 }, (_, k) => `实验 ${String(10 - k).padStart(2, '0')}`)
+    )
+    expect(container.textContent).toContain('第 2 / 3 段 · 9–16 / 共 18 条')
+
+    act(() => findPagerButton(container, '下一段').click())
+    expect(namesInList(container)).toEqual(['实验 02', '实验 01'])
+    expect(container.textContent).toContain('第 3 / 3 段 · 17–18 / 共 18 条')
+    expect(findPagerButton(container, '下一段').disabled).toBe(true)
+
+    act(() => findPagerButton(container, '上一段').click())
+    expect(namesInList(container)[0]).toBe('实验 10')
+    expect(container.textContent).toContain('第 2 / 3 段')
+  })
+
+  it('切换筛选 / 排序后自动回到首段，并按命中数重新分段', () => {
+    act(() => findPagerButton(container, '下一段').click())
+    expect(container.textContent).toContain('第 2 / 3 段')
+
+    // 筛到“已报废”6 条：不足一段，导航消失，从首段展示
+    act(() => setSelect(selectByLabel(container, '按实验结果筛选'), 'ruined'))
+    expect(container.querySelector('.exp-pager')).toBeNull()
+    expect(namesInList(container)).toHaveLength(6)
+    expect(namesInList(container)[0]).toBe('实验 18')
+    expect(container.textContent).toContain('匹配 6 / 共 18 条实验')
+
+    // 清空条件：仍是首段，恢复 18 条分段
+    act(() => {
+      const reset = container.querySelector('.exp-filter-reset') as HTMLButtonElement
+      reset.click()
+    })
+    expect(namesInList(container)).toHaveLength(8)
+    expect(container.textContent).toContain('第 1 / 3 段')
+
+    // 在末段切换时间正序：同样回到首段，最早的记录排在最前
+    act(() => findPagerButton(container, '下一段').click())
+    act(() => findPagerButton(container, '下一段').click())
+    act(() => setSelect(selectByLabel(container, '按保存时间排序'), 'asc'))
+    expect(container.textContent).toContain('第 1 / 3 段')
+    expect(namesInList(container)[0]).toBe('实验 01')
+  })
+
+  it('删除记录后维持正确的段位置与数量；删掉末段最后一条自动回到有效段', async () => {
+    // 停在末段（仅 2 条：实验 02、实验 01）
+    act(() => findPagerButton(container, '下一段').click())
+    act(() => findPagerButton(container, '下一段').click())
+    expect(namesInList(container)).toEqual(['实验 02', '实验 01'])
+
+    // 删掉末段第一条（实验 02）：剩 17 条仍有 3 段，末段剩实验 01
+    act(() => {
+      const items = container.querySelectorAll('.exp-list > li')
+      const delBtn = Array.from(items[0].querySelectorAll('button')).find((b) =>
+        b.textContent?.includes('删除')
+      ) as HTMLButtonElement
+      delBtn.click()
+    })
+    await flushAsync()
+    act(() => findButton(container, '确认删除').click())
+    await flushAsync()
+    expect(useStudio.getState().experiments).toHaveLength(17)
+    expect(container.textContent).toContain('第 3 / 3 段 · 17–17 / 共 17 条')
+    expect(namesInList(container)).toEqual(['实验 01'])
+
+    // 再删掉仅剩的实验 01：只剩两段，自动钳回最后一个有效段（第 2 段）
+    act(() => findButton(container, '删除').click())
+    await flushAsync()
+    act(() => findButton(container, '确认删除').click())
+    await flushAsync()
+    expect(useStudio.getState().experiments).toHaveLength(16)
+    expect(container.textContent).toContain('第 2 / 2 段 · 9–16 / 共 16 条')
+    expect(namesInList(container)).toHaveLength(8)
+  })
+
+  it('保存结论后保持当前段位置与数量（结论改写不影响时间排序）', async () => {
+    act(() => findPagerButton(container, '下一段').click())
+    expect(container.textContent).toContain('第 2 / 3 段')
+    const before = namesInList(container)
+
+    act(() => findButton(container, '查看对照').click())
+    await flushAsync()
+    const textarea = container.querySelector('.exp-conclusion textarea') as HTMLTextAreaElement
+    setInput(textarea, '补记的结论')
+    act(() => findButton(container, '保存结论').click())
+    await flushAsync()
+    act(() => findButton(container, '✕').click())
+    await flushAsync()
+
+    expect(useStudio.getState().experiments).toHaveLength(18)
+    expect(container.textContent).toContain('第 2 / 3 段 · 9–16 / 共 18 条')
+    expect(namesInList(container)).toEqual(before)
+  })
+
+  it('保存结论使记录新命中关键词时，首段结果与数量正确刷新', async () => {
+    const search = container.querySelector('.exp-search') as HTMLInputElement
+    act(() => setInput(search, '含关键词'))
+    expect(namesInList(container)).toEqual(['实验 01'])
+    expect(container.textContent).toContain('匹配 1 / 共 18 条实验')
+
+    act(() => findButton(container, '查看对照').click())
+    await flushAsync()
+    const textarea = container.querySelector('.exp-conclusion textarea') as HTMLTextAreaElement
+    setInput(textarea, '另写的内容')
+    act(() => findButton(container, '保存结论').click())
+    await flushAsync()
+    act(() => findButton(container, '✕').click())
+    await flushAsync()
+
+    // 实验 01 不再命中 → 空态与命中数归零，且不会停在失效页
+    expect(container.querySelector('.exp-list')).toBeNull()
+    expect(container.textContent).toContain('匹配 0 / 共 18 条实验')
+    expect(container.querySelector('.exp-pager')).toBeNull()
+  })
+})
